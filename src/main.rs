@@ -133,8 +133,6 @@ async fn gpt(ctx: &Context, msg: &Message) -> CommandResult {
 			max_tokens: unsafe { _PROMPT_LIMIT }
 		};
 
-		println!("{} {}", guild_id, serde_json::to_string(&req).unwrap());
-
 		let response = client.post("https://api.openai.com/v1/chat/completions")
 			.headers(headers)
 			.body(serde_json::to_string(&req)?)
