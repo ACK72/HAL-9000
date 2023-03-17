@@ -65,7 +65,7 @@ async fn main() {
 	unsafe {
 		_KEY = env::var("OPENAI_APIKEY").expect("Expected an API key in the environment, OPENAI_APIKEY");
 		_MODEL = env::var("HAL_MODEL").unwrap_or("gpt-3.5-turbo".to_string());
-		_MAX_TOKEN = env::var("HAL_MAX_TOKEN").unwrap_or("300".to_string()).parse().unwrap();
+		_MAX_TOKEN = env::var("HAL_MAX_TOKEN").unwrap_or("10000".to_string()).parse().unwrap();
 		_PROMPT_LIMIT = env::var("HAL_PROMPT_LIMIT").unwrap_or("1536".to_string()).parse().unwrap();
 	}
 	let token = env::var("DISCORD_TOKEN").expect("Expected a Token in the environment, DISCORD_TOKEN");
@@ -259,7 +259,7 @@ async fn memory(ctx: &Context, msg: &Message) -> CommandResult {
 		let mut context = String::new();
 
 		for x in mem.iter() {
-			context += format!("token: {}\n{}: {}\n{}: {}\n", x.token, x.user.name, x.user.content, x.assistant.name, x.assistant.content).as_str();
+			context += format!("{}: {}\n{}: {}\n", x.user.name, x.user.content, x.assistant.name, x.assistant.content).as_str();
 		}
 
 		long_message(ctx, msg, context).await;
