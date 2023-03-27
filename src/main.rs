@@ -65,7 +65,7 @@ async fn main() {
 	unsafe {
 		_KEY = env::var("OPENAI_APIKEY").expect("Expected an API key in the environment, OPENAI_APIKEY");
 		_MODEL = env::var("HAL_MODEL").unwrap_or("gpt-3.5-turbo".to_string());
-		_MAX_TOKEN = env::var("HAL_MAX_TOKEN").unwrap_or("10000".to_string()).parse().unwrap();
+		_MAX_TOKEN = env::var("HAL_MAX_TOKEN").unwrap_or("2560".to_string()).parse().unwrap();
 		_PROMPT_LIMIT = env::var("HAL_PROMPT_LIMIT").unwrap_or("1536".to_string()).parse().unwrap();
 	}
 	let token = env::var("DISCORD_TOKEN").expect("Expected a Token in the environment, DISCORD_TOKEN");
@@ -141,42 +141,47 @@ async fn gpt(ctx: &Context, msg: &Message) -> CommandResult {
 			.json::<serde_json::Value>()
 			.await?;
 
-		let context = response["choices"][0]["message"]["content"]
-			.as_str()
-			.unwrap()
-			.trim_matches(&['\r', '\n', ' '][..])
-			.to_string(); // remove quotes by Value -> str -> String
+		let mut save = true;
+		let context = match response["choices"][0]["message"]["content"].as_str() {
+			Some(v) => v.trim_matches(&['\r', '\n', ' '][..]).to_string(),
+			None => {
+				save = false;
+				String::from("ChatGPT API server didn't respond.")
+			}
+		}; // remove quotes by Value -> str -> String
 
 		task.abort();
 		msg.reply(ctx, context.clone()).await?;
 
-		let token = response["usage"]["total_tokens"].as_i64().unwrap() as i32 - calculate_token(guild_id); // TODO: calculate system message
+		if save {
+			let token = response["usage"]["total_tokens"].as_i64().unwrap() as i32 - calculate_token(guild_id); // TODO: calculate system message
 
-		unsafe {
-			if _MAX_TOKEN != 0 {
-				let mut sum = _MAX_TOKEN - token;
-				let mut index = 0;
+			unsafe {
+				if _MAX_TOKEN != 0 {
+					let mut sum = _MAX_TOKEN - token;
+					let mut index = 0;
 
-				for (i, x) in mem.iter().enumerate().rev() {
-					sum -= x.token;
-					if sum <= 0 {
-						index = i+1;
-						break;
+					for (i, x) in mem.iter().enumerate().rev() {
+						sum -= x.token;
+						if sum <= 0 {
+							index = i+1;
+							break;
+						}
 					}
+
+					(*mem).drain(..index);
 				}
 
-				(*mem).drain(..index);
+				(*mem).push(Mem {
+					token: token,
+					user: user.clone(),
+					assistant: Msg {
+						role: "assistant".to_owned(),
+						name: "ChatGPT".to_owned(),
+						content: context
+					}
+				});
 			}
-
-			(*mem).push(Mem {
-				token: token,
-				user: user.clone(),
-				assistant: Msg {
-					role: "assistant".to_owned(),
-					name: "ChatGPT".to_owned(),
-					content: context
-				}
-			});
 		}
 	}
 
