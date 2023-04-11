@@ -52,6 +52,7 @@ static mut _MODEL: String = String::new();
 static mut _CHAT_ENDPOINT: String = String::new();
 static mut _IMAGE_ENDPOINT: String = String::new();
 
+static mut _DEBUG: bool = false;
 static mut _MAX_TOKEN: i32 = 0;
 static mut _PROMPT_LIMIT: i32 = 0;
 
@@ -70,6 +71,13 @@ async fn main() {
 
 		_CHAT_ENDPOINT = env::var("HAL_CHAT_ENDPOINT").unwrap_or("https://api.openai.com/v1/chat/completions".to_string());
 		_IMAGE_ENDPOINT = env::var("HAL_IMAGE_ENDPOINT").unwrap_or("https://api.openai.com/v1/images/generations".to_string());
+		
+		_DEBUG = match env::var("HAL_DEBUG").unwrap_or("0".to_string()).to_lowercase().as_str() {
+			"true" => true,
+			"on" => true,
+			"1" => true,
+			_ => false
+		};
 		
 		_MAX_TOKEN = env::var("HAL_MAX_TOKEN").unwrap_or("2560".to_string()).parse().unwrap();
 		_PROMPT_LIMIT = env::var("HAL_PROMPT_LIMIT").unwrap_or("1536".to_string()).parse().unwrap();
@@ -141,6 +149,11 @@ async fn gpt(ctx: &Context, msg: &Message) -> CommandResult {
 			.await?
 			.json::<serde_json::Value>()
 			.await?;
+		
+		if unsafe { _DEBUG } {
+			let raw = response.clone().to_string();
+			println!("{raw}");
+		}
 
 		let mut save = true;
 		let context = match response["choices"][0]["message"]["content"].as_str() {
@@ -265,6 +278,11 @@ async fn image(ctx: &Context, msg: &Message) -> CommandResult {
 			.await?
 			.json::<serde_json::Value>()
 			.await?;
+		
+		if unsafe { _DEBUG } {
+			let raw = response.clone().to_string();
+			println!("{raw}");
+		}
 
 		let context = match response["data"][0]["url"].as_str() {
 			Some(v) => v.to_string(),
