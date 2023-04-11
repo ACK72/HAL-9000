@@ -2,6 +2,7 @@ use reqwest::header::{
 	HeaderMap, HeaderName
 };
 use serde::Serialize;
+use serde_json::json;
 use std::{
 	env, collections::HashMap
 };
@@ -15,7 +16,7 @@ use serenity::framework::standard::macros::{command, group};
 use serenity::framework::standard::{StandardFramework, CommandResult};
 
 #[group]
-#[commands(gpt, sys, clear, sysclear, token, memory)]
+#[commands(gpt, clear, token, memory, image)]
 struct General;
 struct Handler;
 
@@ -41,15 +42,16 @@ struct Mem {
 	assistant: Msg
 }
 
-static mut _SYS: Lazy<HashMap<u64, Vec<Msg>>> = Lazy::new(|| {
-	return HashMap::<u64, Vec<Msg>>::new();
-});
 static mut _MEM: Lazy<HashMap<u64, Vec<Mem>>> = Lazy::new(|| {
 	return HashMap::<u64, Vec<Mem>>::new();
 });
 
 static mut _KEY: String = String::new();
 static mut _MODEL: String = String::new();
+
+static mut _CHAT_ENDPOINT: String = String::new();
+static mut _IMAGE_ENDPOINT: String = String::new();
+
 static mut _MAX_TOKEN: i32 = 0;
 static mut _PROMPT_LIMIT: i32 = 0;
 
@@ -65,6 +67,10 @@ async fn main() {
 	unsafe {
 		_KEY = env::var("OPENAI_APIKEY").expect("Expected an API key in the environment, OPENAI_APIKEY");
 		_MODEL = env::var("HAL_MODEL").unwrap_or("gpt-3.5-turbo".to_string());
+
+		_CHAT_ENDPOINT = env::var("HAL_CHAT_ENDPOINT").unwrap_or("https://api.openai.com/v1/chat/completions".to_string());
+		_IMAGE_ENDPOINT = env::var("HAL_IMAGE_ENDPOINT").unwrap_or("https://api.openai.com/v1/images/generations".to_string());
+		
 		_MAX_TOKEN = env::var("HAL_MAX_TOKEN").unwrap_or("2560".to_string()).parse().unwrap();
 		_PROMPT_LIMIT = env::var("HAL_PROMPT_LIMIT").unwrap_or("1536".to_string()).parse().unwrap();
 	}
@@ -107,12 +113,7 @@ async fn gpt(ctx: &Context, msg: &Message) -> CommandResult {
 		let mut msgs: Vec<Msg> = Vec::new();
 
 		let guild_id = msg.guild_id.unwrap().0;
-		let sys = unsafe { _SYS.entry(guild_id).or_insert(Vec::new()) };
 		let mem = unsafe { _MEM.entry(guild_id).or_insert(Vec::new()) };
-
-		for s in sys.iter() {
-			msgs.push(s.clone());
-		}
 
 		for m in mem.iter() {
 			msgs.push(m.user.clone());
@@ -133,7 +134,7 @@ async fn gpt(ctx: &Context, msg: &Message) -> CommandResult {
 			max_tokens: unsafe { _PROMPT_LIMIT }
 		};
 
-		let response = client.post("https://api.openai.com/v1/chat/completions")
+		let response = client.post(unsafe { _CHAT_ENDPOINT.clone() })
 			.headers(headers)
 			.body(serde_json::to_string(&req)?)
 			.send()
@@ -154,7 +155,7 @@ async fn gpt(ctx: &Context, msg: &Message) -> CommandResult {
 		msg.reply(ctx, context.clone()).await?;
 
 		if save {
-			let token = response["usage"]["total_tokens"].as_i64().unwrap() as i32 - calculate_token(guild_id); // TODO: calculate system message
+			let token = response["usage"]["total_tokens"].as_i64().unwrap() as i32 - calculate_token(guild_id);
 
 			unsafe {
 				if _MAX_TOKEN != 0 {
@@ -189,25 +190,17 @@ async fn gpt(ctx: &Context, msg: &Message) -> CommandResult {
 }
 
 #[command]
-async fn sys(ctx: &Context, msg: &Message) -> CommandResult {
+async fn memory(ctx: &Context, msg: &Message) -> CommandResult {
 	let guild_id = msg.guild_id.unwrap().0;
-	let sys = unsafe { _SYS.entry(guild_id).or_insert(Vec::new()) };
+	let mem = unsafe { _MEM.entry(guild_id).or_insert(Vec::new()) };
 
-	if msg.content.len() > 5 {
-		(*sys).push(Msg {
-			role: "system".to_owned(),
-			name: "".to_owned(),
-			content: msg.content[5..].to_string()
-		});
-
-		msg.reply(ctx, "System rule has been updated.").await?;
-	} else if sys.len() == 0 {
-		msg.reply(ctx, "No system rules.").await?;
+	if mem.len() == 0 {
+		msg.reply(ctx, "No memories.".to_string()).await?;
 	} else {
 		let mut context = String::new();
 
-		for (i, x) in sys.iter().enumerate() {
-			context += format!("{}: {}\n", i+1, x.content).as_str();
+		for x in mem.iter() {
+			context += format!("{}: {}\n{}: {}\n", x.user.name, x.user.content, x.assistant.name, x.assistant.content).as_str();
 		}
 
 		long_message(ctx, msg, context).await;
@@ -224,17 +217,7 @@ async fn clear(ctx: &Context, msg: &Message) -> CommandResult {
 	(*mem).clear();
 
 	msg.reply(ctx, "Memory has been cleared.").await?;
-	Ok(())
-}
-
-#[command]
-async fn sysclear(ctx: &Context, msg: &Message) -> CommandResult {
-	let guild_id = msg.guild_id.unwrap().0;
-	let sys = unsafe { _SYS.entry(guild_id).or_insert(Vec::new()) };
-
-	(*sys).clear();
-
-	msg.reply(ctx, "System rule has been cleared.".to_string()).await?;
+	
 	Ok(())
 }
 
@@ -254,20 +237,42 @@ async fn token(ctx: &Context, msg: &Message) -> CommandResult {
 }
 
 #[command]
-async fn memory(ctx: &Context, msg: &Message) -> CommandResult {
-	let guild_id = msg.guild_id.unwrap().0;
-	let mem = unsafe { _MEM.entry(guild_id).or_insert(Vec::new()) };
+async fn image(ctx: &Context, msg: &Message) -> CommandResult {
+	if msg.content.len() > 5 {
+		let http = ctx.http.clone();
+		let channel_id = msg.channel_id.0;
 
-	if mem.len() == 0 {
-		msg.reply(ctx, "No memories.".to_string()).await?;
-	} else {
-		let mut context = String::new();
+		let task = tokio::spawn(async move {
+			loop {
+				let _ = http.broadcast_typing(channel_id).await;
+			}
+		});
 
-		for x in mem.iter() {
-			context += format!("{}: {}\n{}: {}\n", x.user.name, x.user.content, x.assistant.name, x.assistant.content).as_str();
-		}
+		let client = reqwest::Client::new();
+		let mut headers = HeaderMap::new();
 
-		long_message(ctx, msg, context).await;
+		unsafe { headers.insert("Authorization".parse::<HeaderName>().unwrap(), format!("Bearer {}", _KEY).parse().unwrap()); }
+		headers.insert("Content-Type".parse::<HeaderName>().unwrap(), "application/json".parse().unwrap());
+
+		let response = client.post(unsafe { _IMAGE_ENDPOINT.clone() })
+			.headers(headers)
+			.body(json!({
+				"prompt": msg.content[5..].to_string(),
+				"n": 1,
+				"size": "1024x1024"
+			}).to_string())
+			.send()
+			.await?
+			.json::<serde_json::Value>()
+			.await?;
+
+		let context = match response["data"][0]["url"].as_str() {
+			Some(v) => v.to_string(),
+			None => String::from("DALL·E API server didn't respond.")
+		};
+
+		task.abort();
+		msg.reply(ctx, context.clone()).await?;
 	}
 
 	Ok(())
