@@ -4,7 +4,7 @@ use reqwest::header::{
 use serde::Serialize;
 use serde_json::json;
 use std::{
-	env, collections::HashMap
+	env, collections::HashMap, io::stdin
 };
 
 use once_cell::sync::Lazy;
@@ -53,7 +53,7 @@ static mut _CHAT_ENDPOINT: String = String::new();
 static mut _IMAGE_ENDPOINT: String = String::new();
 
 static mut _DEBUG: bool = false;
-static mut _MAX_TOKEN: i32 = 0;
+static mut _MEMORY_LIMIT: i32 = 0;
 static mut _PROMPT_LIMIT: i32 = 0;
 
 #[async_trait]
@@ -65,6 +65,30 @@ impl EventHandler for Handler {
 
 #[tokio::main]
 async fn main() {
+	let _ = tokio::spawn(async move {
+		loop {
+			let mut buffer = String::new();
+			stdin().read_line(&mut buffer).unwrap();
+			
+			let command = buffer.strip_suffix("\r\n").or(buffer.strip_suffix("\n")).unwrap();
+			
+			let message = match command {
+				"debug true" => {
+					unsafe { _DEBUG = true; }
+					"Debug mode enabled."
+				},
+				"debug false" => {
+					unsafe { _DEBUG = false; }
+					"Debug mod disabled."
+				},
+				"help" => " - debug true/false",
+				_ => "Unknown command. Use help to list possible command."
+			};
+			
+			println!("{}", message);
+		}
+	});
+	
 	unsafe {
 		_KEY = env::var("OPENAI_APIKEY").expect("Expected an API key in the environment, OPENAI_APIKEY");
 		_MODEL = env::var("HAL_MODEL").unwrap_or("gpt-3.5-turbo".to_string());
@@ -72,14 +96,7 @@ async fn main() {
 		_CHAT_ENDPOINT = env::var("HAL_CHAT_ENDPOINT").unwrap_or("https://api.openai.com/v1/chat/completions".to_string());
 		_IMAGE_ENDPOINT = env::var("HAL_IMAGE_ENDPOINT").unwrap_or("https://api.openai.com/v1/images/generations".to_string());
 		
-		_DEBUG = match env::var("HAL_DEBUG").unwrap_or("0".to_string()).to_lowercase().as_str() {
-			"true" => true,
-			"on" => true,
-			"1" => true,
-			_ => false
-		};
-		
-		_MAX_TOKEN = env::var("HAL_MAX_TOKEN").unwrap_or("2560".to_string()).parse().unwrap();
+		_MEMORY_LIMIT = env::var("HAL_MEMORY_LIMIT").unwrap_or("2560".to_string()).parse().unwrap();
 		_PROMPT_LIMIT = env::var("HAL_PROMPT_LIMIT").unwrap_or("1536".to_string()).parse().unwrap();
 	}
 	let token = env::var("DISCORD_TOKEN").expect("Expected a Token in the environment, DISCORD_TOKEN");
@@ -149,17 +166,18 @@ async fn gpt(ctx: &Context, msg: &Message) -> CommandResult {
 			.await?
 			.json::<serde_json::Value>()
 			.await?;
-		
-		if unsafe { _DEBUG } {
-			let raw = response.clone().to_string();
-			println!("{raw}");
-		}
 
 		let mut save = true;
 		let context = match response["choices"][0]["message"]["content"].as_str() {
 			Some(v) => v.trim_matches(&['\r', '\n', ' '][..]).to_string(),
 			None => {
 				save = false;
+				
+				if unsafe { _DEBUG } {
+					let raw = response.to_string();
+					println!("{raw}");
+				}
+				
 				String::from("ChatGPT API server didn't respond.")
 			}
 		}; // remove quotes by Value -> str -> String
@@ -171,8 +189,8 @@ async fn gpt(ctx: &Context, msg: &Message) -> CommandResult {
 			let token = response["usage"]["total_tokens"].as_i64().unwrap() as i32 - calculate_token(guild_id);
 
 			unsafe {
-				if _MAX_TOKEN != 0 {
-					let mut sum = _MAX_TOKEN - token;
+				if _MEMORY_LIMIT != 0 {
+					let mut sum = _MEMORY_LIMIT - token;
 					let mut index = 0;
 
 					for (i, x) in mem.iter().enumerate().rev() {
@@ -240,9 +258,9 @@ async fn token(ctx: &Context, msg: &Message) -> CommandResult {
 	let token = calculate_token(guild_id);
 
 	unsafe {
-		msg.reply(ctx, match _MAX_TOKEN {
+		msg.reply(ctx, match _MEMORY_LIMIT {
 			0 => format!("{} tokens used in memory.", token),
-			_ => format!("{}/{} tokens used in memory.", token, _MAX_TOKEN)
+			_ => format!("{}/{} tokens used in memory.", token, _MEMORY_LIMIT)
 		}).await?
 	};
 
@@ -283,10 +301,16 @@ async fn image(ctx: &Context, msg: &Message) -> CommandResult {
 			let raw = response.clone().to_string();
 			println!("{raw}");
 		}
-
+		
 		let context = match response["data"][0]["url"].as_str() {
 			Some(v) => v.to_string(),
-			None => String::from("DALL·E API server didn't respond.")
+			None => {
+				if unsafe { _DEBUG } {
+					let raw = response.to_string();
+					println!("{raw}");
+				}
+				String::from("DALL·E API server didn't respond.")
+			}
 		};
 
 		task.abort();
