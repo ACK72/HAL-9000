@@ -79,7 +79,7 @@ async fn main() {
 				},
 				"debug false" => {
 					unsafe { _DEBUG = false; }
-					"Debug mod disabled."
+					"Debug mode disabled."
 				},
 				"help" => " - debug true/false",
 				_ => "Unknown command. Use help to list possible command."
