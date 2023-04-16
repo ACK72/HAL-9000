@@ -24,6 +24,7 @@ struct Handler;
 struct Req {
 	model: String,
 	messages: Vec<Msg>,
+	#[serde(skip_serializing_if = "is_zero")]
 	max_tokens: i32
 }
 
@@ -97,7 +98,7 @@ async fn main() {
 		_IMAGE_ENDPOINT = env::var("HAL_IMAGE_ENDPOINT").unwrap_or("https://api.openai.com/v1/images/generations".to_string());
 		
 		_MEMORY_LIMIT = env::var("HAL_MEMORY_LIMIT").unwrap_or("2560".to_string()).parse().unwrap();
-		_PROMPT_LIMIT = env::var("HAL_PROMPT_LIMIT").unwrap_or("1536".to_string()).parse().unwrap();
+		_PROMPT_LIMIT = env::var("HAL_PROMPT_LIMIT").unwrap_or("0".to_string()).parse().unwrap();
 	}
 	let token = env::var("DISCORD_TOKEN").expect("Expected a Token in the environment, DISCORD_TOKEN");
 
@@ -183,7 +184,7 @@ async fn gpt(ctx: &Context, msg: &Message) -> CommandResult {
 		}; // remove quotes by Value -> str -> String
 
 		task.abort();
-		msg.reply(ctx, context.clone()).await?;
+		long_message(ctx, msg, context.clone()).await;
 
 		if save {
 			let token = response["usage"]["total_tokens"].as_i64().unwrap() as i32 - calculate_token(guild_id);
@@ -195,7 +196,7 @@ async fn gpt(ctx: &Context, msg: &Message) -> CommandResult {
 
 					for (i, x) in mem.iter().enumerate().rev() {
 						sum -= x.token;
-						if sum <= 0 {
+						if sum < 0 {
 							index = i+1;
 							break;
 						}
@@ -205,7 +206,7 @@ async fn gpt(ctx: &Context, msg: &Message) -> CommandResult {
 				}
 
 				(*mem).push(Mem {
-					token: token,
+					token: token as i32,
 					user: user.clone(),
 					assistant: Msg {
 						role: "assistant".to_owned(),
@@ -320,6 +321,10 @@ async fn image(ctx: &Context, msg: &Message) -> CommandResult {
 	Ok(())
 }
 
+fn is_zero(n: &i32) -> bool {
+	(*n) == 0
+}
+
 fn calculate_token(guild_id: u64) -> i32 {
 	let mut token = 0;
 
@@ -329,7 +334,7 @@ fn calculate_token(guild_id: u64) -> i32 {
 		token += x.token;
 	}
 
-	return token;
+	token
 }
 
 async fn long_message(ctx: &Context, msg: &Message, context: String) {
